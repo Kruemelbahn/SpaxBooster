@@ -3,7 +3,7 @@
 SpaxBooster (originally developed by FREMO) is a simple DCC-Booster controlled via LocoNET.<br>
 Because I missed an acoustic and optical sign on overload, I made some small additions (including a 'new' PCB).
 
-For more details please refer to the [manual](https://github.com/Kruemelbahn/SpaxBooster/Spaxbooster%20V3%20-%20Rev.5.pdf).<br>
+For more details please refer to the [manual](https://github.com/Kruemelbahn/SpaxBooster/blob/main/Spaxbooster%20V3%20-%20Rev.5.pdf).<br>
 <hr>
 The original files developed by FREMO for SpaxBooster can be found here:<br>
 https://sourceforge.net/projects/fremodcc/files/SHMDBoost/V0.4/<br>
