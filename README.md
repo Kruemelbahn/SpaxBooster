@@ -6,7 +6,5 @@ Because I missed an acoustic and optical sign on overload, I made some small add
 For more details please refer to the [manual](Spaxbooster%20V3%20-%20Rev.5.pdf).<br>
 
 ### original files
-The original files developed by FREMO for SpaxBooster can be found here:<br>
-https://sourceforge.net/projects/fremodcc/files/SHMDBoost/V0.4/<br>
-More informations (including schematics and PCB-layout) can be found on the FREMO-Webpage:<br>
-https://fremodcc.sourceforge.net/booster/spaxbooster/spax3_d.html
+- the original files developed by FREMO for SpaxBooster can be found here: https://sourceforge.net/projects/fremodcc/files/SHMDBoost/V0.4/
+- more informations (including schematics and PCB-layout) can be found on the FREMO-Webpage: https://fremodcc.sourceforge.net/booster/spaxbooster/spax3_d.html
