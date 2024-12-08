@@ -5,7 +5,7 @@
 @ECHO .      *  *     *   *  * *
 @ECHO .   ***   *     *   * *   * ALARM
 @ECHO .
-@ECHO . build file for version 4.0
+@ECHO . build file for version 6.0
 @ECHO .
 @REM set installation directory of assembler
 @REM 

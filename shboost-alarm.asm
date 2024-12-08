@@ -36,6 +36,9 @@
 ;**************************************************************
 ; zim: 11.05.09: Overloadalarm added, not for PIC12C508, config changed
 ; zim: 19.03.13: added buzzer off in loopsns, PIC12C508 and PIC16F84 removed
+; zim: 30.03.15: delay for buzzer added
+; zim: 08.11.24: emergency off added, shortcircuit ouput (E, Lenz-compatible 'CDE')
+
 
 	list p=16F628, w=0, r=DEC
 
@@ -50,24 +53,31 @@ SER1	EQU	H'0000'
 SER2	EQU	H'0001'
 
 
-#define SER_DAT1	PORTB,SER1	; RB0,data input
-#define SER_DAT2	PORTB,SER2	; RB1,data input
+#define SER_DAT1	PORTB,SER1		; RB0,data input
+#define SER_DAT2	PORTB,SER2		; RB1,data input
 #define ENABLE		PORTB,0x0002	; RB2,L6203 enable output
 #define SENSE		PORTB,0x0003	; RB3,current sense input
 #define	LED_RED		PORTB,0x0004	; RB4,LED, red
 #define LED_GREEN	PORTB,0x0005	; RB5,LED, green
 ;+++buzzer added:
-#define BUZZER_OFF	PORTB,0x0006	; RB6,Buzzer, off
+#define BUZZER_OFF	PORTB,0x0006	; RB6,Buzzer, button off
 #define BUZZER		PORTB,0x0007	; RB7,Buzzer on Overload
+;+++short circuit 'E' added:
+#define SHORT_E		PORTA,0x0000	; PA0,short circuit 'E'
+;+++emergency stop added:
+#define EMERGENCY	PORTA,0x0001	; PA1,button emergency stop
 ;---
 
-#define timer0_scale_256 0x57		; option_reg values for tmr0 prescaler values
-#define timer0_scale_128 0x56		; portb pull-up, clock on internal clock
-#define timer0_scale_64 0x55
-#define timer0_scale_32 0x54
-#define timer0_scale_16 0x53
-#define timer0_scale_8 0x52
-#define timer0_scale_4 0x51
+; OPTION_REG values for tmr0 prescaler values
+; portb pull-up active (bit7=0)
+; clock on internal clock
+#define timer0_scale_256	B'01010111'
+#define timer0_scale_128	B'01010110'
+;#define timer0_scale_64	B'01010101'	
+#define timer0_scale_32 	B'01010100'	
+;#define timer0_scale_16 	B'01010011'	
+;#define timer0_scale_8 	B'01010010'
+#define timer0_scale_4 		B'01010001'
 
 	cblock	0x0020 			; fuer 16F628
 	flags
@@ -77,24 +87,34 @@ SER2	EQU	H'0001'
 	SER2_INACTIVE
 	temp
 	temp2
-	nmb_short_try			; how often are we allowed to try to apply
-					; power to track ? (counts down from pwr_off_ratio to 1)
+	nmb_short_try		; how often are we allowed to try to apply
+						; power to track ? (counts down from pwr_off_ratio to 1)
 	retry_delay			; number of timer0 ovl to wait to apply power to track
 	sense_wait			; number of timer0 ovl to wait to remove power due to
-					; sense error
-	timer0_pre_scale    		; reload value for option reg to set different prescaler
-					; values for timer0 
-	pwr_off_ratio			; ratio (2^pwr_off_ratio) for max. pwr off time
+						; sense error
+	timer0_pre_scale   	; reload value for option reg to set different prescaler
+						; values for timer0 
+	pwr_off_ratio		; ratio (2^pwr_off_ratio) for max. pwr off time
 	sense_cntr			; how often has sense to be active before removing power
 
+;+++buzzer added:
+	buzz_cntr			; counter down for buzzer delay
+;+++emergency stop added:
+	Blink_reg
+	W_save		: 1		; ISR-Zwischenspeicher
+	Status_save	: 1		; ISR-Zwischenspeicher
+;---
 	endc
 
 
 
-#define	rs_err		flags,0
-#define	sense_err	flags,1
+#define	rs_err			flags,0
+#define	sense_err		flags,1
 ;+++buzzer added:
-#define buzz_off	flags,2
+#define buzz_off		flags,2
+;+++emergency stop added:
+#define emergency_on	flags,3
+;---
 
 #define def_pwr_off_ratio 4 		; default value for pwr_off_ratio
 #define def_sense_cntr    0x30		; default value for sense_cntr
@@ -105,57 +125,137 @@ READPORT MACRO
 	endm
 
 bank_0	MACRO
-	bcf	STATUS,RP0
+	bcf		STATUS,RP0
 	ENDM
 
 bank_1	MACRO
-	bsf	STATUS,RP0
+	bsf		STATUS,RP0
 	ENDM
 
 led_ok	MACRO
-	bcf	LED_RED
-	bsf	LED_GREEN
+	bcf		LED_RED
+	bsf		LED_GREEN
+;+++short circuit 'E' added:
+	bcf		SHORT_E
+;---
 	ENDM
 
-led_rserr MACRO
-	bsf	LED_RED
-	bsf	LED_GREEN
+led_rserr MACRO		; same as led_on = both leds on
+	bsf		LED_RED
+	bsf		LED_GREEN
 	ENDM
 
 led_sense MACRO
-	bsf	LED_RED
-	bcf	LED_GREEN
+	bsf		LED_RED
+	bcf		LED_GREEN
+;+++short circuit 'E' added:
+	bsf		SHORT_E
+;---
 	ENDM
+
+;+++emergency stop added:
+led_off MACRO
+	bcf		LED_RED
+	bcf		LED_GREEN
+	ENDM
+;---
+
+;+++buzzer added:
+init_buzz_cntr MACRO
+	movlw	D'100'
+	movwf	buzz_cntr
+	ENDM
+;---
+
+;+++since emergency stop added:
+;**************************************************************
+; EEPROM
+		org	2100h
+sw_kennung:	de	"MZ", .23
+de_spax:	de	"SpaxBooster"
+		de	"6.0"
+ 		de	.0
+;---
 
 ;**************************************************************
 	org 	0x0000
+	goto	init_all
 
+;===============================================================
+;+++emergency stop added:
+    org     0x0004 		; InterruptServiceVector 
+    movwf   W_save      ; save W 
+    swapf   STATUS,W 	; contains also selected bank
+    bank_0 
+    movwf   Status_save 
+
+	; handle interrupt for Timer 1:
+	; clock/4 / 65536 / 8 => ISR each 0,52 s
+	btfss	PIR1, TMR1IF	; TMR1IF = 1 = INT durch Timer 1?
+	goto	end_isr			; nein!
+
+	bcf		PIR1, TMR1IF	; reset Interruptflag for Timer 1
+	incf	Blink_reg, 1
+
+end_isr
+    ; End ISR, restore context and return to the main program 
+    swapf   Status_save, w 
+    movwf   STATUS 
+    swapf   W_save,f	; restore W without corrupting STATUS 
+    swapf   W_save,w 
+    retfie 
+;---
+;===============================================================
+
+init_all
 	movlw	timer0_scale_32
-	movwf	timer0_pre_scale; store timer0 prescaler
-	movlw	def_pwr_off_ratio; set default power off ratio
+	movwf	timer0_pre_scale	; store timer0 prescaler
+	movlw	def_pwr_off_ratio	; set default power off ratio
 	movwf	pwr_off_ratio
-	movlw	def_sense_cntr	; set default power off ratio
+	movlw	def_sense_cntr		; set default power off ratio
 	movwf	sense_cntr
 
-	movlw	0x07
-	movwf	CMCON		; set PortA to digital I/O, only required for 16F628
+	movlw	B'00000111'			; comparators off
+	movwf	CMCON				; set PortA to digital I/O, only required for 16F628
 
-;+++initializing changed:
-	movlw	0x4b;		; initialize TRIS
+;+++short circuit 'E' added:
+	clrf	PORTA
+;+++initializing for buzzer changed:
+	bcf		buzz_off
+	init_buzz_cntr		; initialize buzzer delay
+	movlw	B'01001011'	; initialize TRIS, inputs are set to one
 	bank_1
 	movwf	TRISB
+;+++initializing for emergency stop added:
+	bsf		PIE1, TMR1IE; enable ISR for Timer 1 (TMR1IE)
+;+++short circuit 'E' added:
+	movlw	B'00000010'	; initialize TRIS, inputs are set to one
+	movwf	TRISA
+;---
+
 	bank_0
 
+	clrf	flags		; clear all flags
+;+++emergency stop added:
+	clrf	Blink_reg
+	movlw	B'00110001'	; prescaler 8:1 for Timer 1, interval clock/4, start Timer 1
+	movwf	T1CON
+	clrf	TMR1L		; counterstart: 0
+	clrf	TMR1H		; clock/4 / 65536 / 8 => ISR each 0,52 s
+	bsf		INTCON, PEIE; periphal ISR on
+	bsf		INTCON, GIE	; general ISR on
+;---
+
 	led_rserr		; initialize ports, show rs error
-	bcf	ENABLE		; be silent at first
+	bcf		ENABLE	; be silent at first
 
 	clrf	ser_changed	; clear ser_changed register
 	READPORT		; test whether pulses on both rs lines
 	andlw	0x03
 	movwf	store_gpio
 
-
-no_rs	READPORT		; test whether rs lines change
+no_rs	
+	READPORT			; test whether rs lines change
 	andlw	0x03
 	movwf	temp		; store port
 	xorwf	store_gpio,w
@@ -170,13 +270,13 @@ no_rs	READPORT		; test whether rs lines change
 	movf	temp,w
 	movwf	store_gpio	; store gpio status
 
-	led_ok			; switch RSERR LED off
-	bcf	sense_err	; clear sense_err flag
+	led_ok				; switch RSERR LED off
+	bcf		sense_err	; clear sense_err flag
 
 
 	movlw	D'10'
 	movwf	SER1_INACTIVE	; initialize idle counters
-	movwf	SER2_INACTIVE	;
+	movwf	SER2_INACTIVE
 	clrf	retry_delay
 	movf	pwr_off_ratio,w
 	movwf	nmb_short_try
@@ -191,20 +291,41 @@ no_rs	READPORT		; test whether rs lines change
 	movwf	OPTION_REG
 	bank_0
 
-loopidle
-	bsf	ENABLE		; apply power to track
-	bcf	sense_err	; clear sense_err flag
+loopidle			; main loop
+	bsf		ENABLE	; apply power to track
+	bcf		sense_err; clear sense_err flag
 	led_ok
-loop	clrwdt
+loop
+	clrwdt
 
 ;+++buzzer added:
 	btfsc	BUZZER_OFF
+	goto	check_emergency
+	bsf		buzz_off
+	bcf		BUZZER
+;+++emergency stop added:
+	bcf 	emergency_on
+check_emergency
+	btfss	EMERGENCY
+	bsf		emergency_on
+
+	btfss	emergency_on
 	goto	wait_t
-	bsf	buzz_off
-	bcf	BUZZER
+	; emergency is activated:
+	bcf		ENABLE
+	
+	btfsc	Blink_reg,0
+	goto	leds_on
+	; leds off:
+	led_off
+	goto	loop
+leds_on
+	led_rserr
+	goto	loop
 ;---
 
-wait_t	movf	TMR0,w
+wait_t	
+	movf	TMR0,w
 	btfss	STATUS,Z
 	goto	wait_t
 	movlw	(D'255' - D'13'); initialize timer to 62 usec
@@ -219,7 +340,7 @@ wait_t	movf	TMR0,w
 	movf	temp,w
 	movwf	store_gpio
 
-	bcf	rs_err		; clear rs_err flag
+	bcf		rs_err		; clear rs_err flag
 	movlw	D'10'		; test whether ser1_dat changes
 	btfsc	ser_changed,SER1
 	movwf	SER1_INACTIVE	; yes, reset idle count
@@ -228,9 +349,11 @@ wait_t	movf	TMR0,w
 	goto	rs1_err		; yes
 	decf	SER1_INACTIVE,F	; no, decrement idle counter
 	goto	t2
-rs1_err	bsf	rs_err
+rs1_err
+	bsf		rs_err
 
-t2	movlw	D'10'		; test whether ser2_dat changes
+t2
+	movlw	D'10'		; test whether ser2_dat changes
 	btfsc	ser_changed,SER2
 	movwf	SER2_INACTIVE	; yes, reset idle count
 	movf	SER2_INACTIVE,F
@@ -238,11 +361,13 @@ t2	movlw	D'10'		; test whether ser2_dat changes
 	goto	rs2_err		; yes
 	decf	SER2_INACTIVE,f	; no, decrement idle counter
 	goto	rs_exit
-rs2_err	bsf	rs_err		; yes, set rs_err flag
+rs2_err	
+	bsf		rs_err		; yes, set rs_err flag
 
-rs_exit	btfss	rs_err
+rs_exit	
+	btfss	rs_err
 	goto	tsense
-	bcf	ENABLE
+	bcf		ENABLE
 	led_rserr
 	goto	loop
 
@@ -260,7 +385,8 @@ tsense
 	decfsz	sense_wait,f	; decrement sense_wait cntr
 	goto	arm_sns_err	; not zero, then wait
 
-pwr_off	bcf	ENABLE		; remove power at once
+pwr_off
+	bcf		ENABLE		; remove power at once
 	movf	timer0_pre_scale,w ; change timer0 prescaler
 	bank_1
 	movwf	OPTION_REG
@@ -270,11 +396,12 @@ pwr_off	bcf	ENABLE		; remove power at once
 	movwf	TMR0
 	
 	led_sense
-	bsf	sense_err
+	bsf		sense_err
 
 ;+++buzzer added:
+	init_buzz_cntr
 	btfss	buzz_off
-	bsf	BUZZER
+	bsf		BUZZER
 ;---
 
 	movlw	1
@@ -283,8 +410,9 @@ pwr_off	bcf	ENABLE		; remove power at once
 	movf	nmb_short_try,w	; calculate delay time
 	movwf	temp		; retry_delay = 0x800 >> nmb_short_try
 	clrf	temp2
-	bsf	STATUS,C
-rol	rrf	temp2,f
+	bsf		STATUS,C
+rol
+	rrf		temp2,f
 	decfsz	temp,f
 	goto	rol
 	movf	temp2,w
@@ -295,16 +423,37 @@ rol	rrf	temp2,f
 	goto	loopsns
 	movwf	nmb_short_try	; don't go below 1
 
-loopsns clrwdt
+loopsns
+	clrwdt
 
 ;+++buzzer added:
 	btfsc	BUZZER_OFF
+	goto	check_emergency_2
+	bsf		buzz_off
+	bcf		BUZZER
+;+++emergency stop added:
+	bcf 	emergency_on
+check_emergency_2
+	btfss	EMERGENCY
+	bsf		emergency_on
+
+	btfss	emergency_on
 	goto	wait_t2
-	bsf	buzz_off
-	bcf	BUZZER
+	; emergency is activated:
+	bcf		ENABLE
+	
+	btfsc	Blink_reg,0
+	goto	leds_on2
+	; leds off:
+	led_off
+	goto	loopsns
+leds_on2
+	led_rserr
+	goto	loopsns
 ;---
 
-wait_t2	movf	TMR0,w
+wait_t2
+	movf	TMR0,w
 	btfss	STATUS,Z
 	goto	loopsns
 
@@ -318,7 +467,8 @@ wait_t2	movf	TMR0,w
 	decfsz	retry_delay,f	; wait until it's time
 	goto	loopsns
 				; now it's time
-retry movlw	timer0_scale_4 ; change timer0 prescaler to default
+retry
+	movlw	timer0_scale_4 ; change timer0 prescaler to default
 	bank_1
 	movwf	OPTION_REG
 	bank_0
@@ -328,7 +478,6 @@ retry movlw	timer0_scale_4 ; change timer0 prescaler to default
 	goto	loopidle
 
 arm_sns_err
-
 	movf	pwr_off_ratio,w	; reset nmb_short_try
 	movwf	nmb_short_try
 	goto	loopidle
@@ -336,11 +485,18 @@ arm_sns_err
 sense_ok
 	movf	sense_cntr,w
 	movwf	sense_wait
-	bcf	sense_err	; clear sense_err flag
+	bcf		sense_err	; clear sense_err flag
 
 ;+++buzzer added:
 	bcf	BUZZER
-	bcf	buzz_off
+
+	decfsz	buzz_cntr,f
+	goto	skip_buz	; jump if not zero
+	bcf		buzz_off
+;+++emergency stop added:
+	bcf 	emergency_on
+	init_buzz_cntr
+skip_buz	
 ;---
 
 	movf	pwr_off_ratio,w		; reset nmb_short_try
