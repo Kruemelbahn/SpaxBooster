@@ -5,6 +5,9 @@ Because I missed an acoustic and optical sign on overload, I made some small add
 
 For more details please refer to the [manual](Documentation/Spaxbooster%20V3%20-%20Rev.6.pdf).<br>
 
+## New for V3.0 Rev.6a
+- Pin header for emergency stop (S2) combined with pin header K3
+
 ## New for V3.0 Rev.6
 - R4 removed (must!)
 - Emergency-stop added (R12 must! Button is optional)
